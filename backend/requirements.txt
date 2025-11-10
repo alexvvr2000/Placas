@@ -1,5 +1,4 @@
-pytesseract
-numpy
-pillow
-types-Pillow
 opencv-python
+numpy
+imutils
+easyocr
