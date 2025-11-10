@@ -2,3 +2,5 @@ opencv-python
 numpy
 imutils
 easyocr
+flask
+flask_restx
