@@ -1,66 +1,90 @@
-import cv2
-import numpy as np
-import imutils
-import easyocr
+from typing import Optional
+from easyocr import Reader  # type: ignore
+from cv2 import imread
+from dataclasses import dataclass
+from enum import Enum
+from re import sub, match
 
-def get_plate(img):
-    """
-    Detecta y extrae el texto de una placa vehicular en una imagen.
-    
-    Args:
-        img: Imagen en formato BGR (como la lee cv2.imread)
-    
-    Returns:
-        str: Texto de la placa detectada o cadena vacía si no se detecta
-    """
-    # Convertir a escala de grises
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
-    # Reducción de ruido
-    bfilter = cv2.bilateralFilter(gray, 11, 17, 17)
-    
-    # Detección de bordes
-    edged = cv2.Canny(bfilter, 30, 200)
-    
-    # Encontrar contornos
-    keypoints = cv2.findContours(edged.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    contours = imutils.grab_contours(keypoints)
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)[:10]
-    
-    # Buscar contorno rectangular (placa)
-    location = None
-    for contour in contours:
-        approx = cv2.approxPolyDP(contour, 10, True)
-        if len(approx) == 4:
-            location = approx
-            break
-    
-    # Si no se encuentra placa, retornar cadena vacía
-    if location is None:
-        return ""
-    
-    # Crear máscara y extraer región de la placa
-    mask = np.zeros(gray.shape, np.uint8)
-    cv2.drawContours(mask, [location], 0, 255, -1)
-    new_image = cv2.bitwise_and(img, img, mask=mask)
-    
-    # Recortar la región de la placa
-    (x, y) = np.where(mask == 255)
-    (x1, y1) = (np.min(x), np.min(y))
-    (x2, y2) = (np.max(x), np.max(y))
-    cropped_image = gray[x1:x2+1, y1:y2+1]
-    
-    # Usar EasyOCR para leer el texto
-    reader = easyocr.Reader(['en'])
-    result = reader.readtext(cropped_image)
-    
-    # Retornar el texto de la placa (primer resultado)
-    if result:
-        return result[0][-2]
-    else:
-        return ""
+OCR_LANGUAGES = ["es", "en"]
+OCR_CONFIDENCE_THRESHOLD = 0.4
+OCR_READER: Optional[Reader] = None
 
-# Ejemplo de uso:
-# img = cv2.imread('image4.jpg')
-# plate_text = get_plate(img)
-# print(plate_text)
+
+class PlateFormat(Enum):
+    NUEVO = r"^[A-Z]{3}[\s\-]?[0-9]{2}[\s\-]?[0-9]{2}$"
+    ANTIGUO = r"^[A-Z]{3}[\s\-]?[0-9]{2}[\s\-]?[0-9]{2}$"
+    MOTOCICLETA = r"^[A-Z]{1}[\s\-]?[0-9]{2}[\s\-]?[A-Z]{2}[\s\-]?[0-9]{2}$"
+    OFICIAL = r"^GO[\s\-]?[0-9]{5}$"
+    FEDERAL = r"^TF[\s\-]?[0-9]{5}$"
+    DIPLOMATICO = r"^CD[\s\-]?[0-9]{5}$"
+
+
+@dataclass
+class OCRResult:
+    text: str
+    confidence: float
+
+
+def get_ocr_reader():
+    global OCR_READER
+    if OCR_READER is None:
+        OCR_READER = Reader(OCR_LANGUAGES)
+    return OCR_READER
+
+
+def get_plate(img) -> str:
+    reader = get_ocr_reader()
+
+    image = load_image(img)
+    if image is None:
+        return "Placa no detectada"
+
+    results = reader.readtext(image)
+
+    valid_plates = []
+    for bbox, text, confidence in results:
+        if confidence >= OCR_CONFIDENCE_THRESHOLD:
+            cleaned_text = clean_plate_text(text)
+            if is_valid_plate(cleaned_text):
+                formatted_text = format_plate(cleaned_text)
+                valid_plates.append(OCRResult(formatted_text, confidence))
+
+    if valid_plates:
+        valid_plates.sort(key=lambda x: x.confidence, reverse=True)
+        return valid_plates[0].text
+
+    return "Placa no detectada"
+
+
+def load_image(img):
+    if isinstance(img, str):
+        return imread(img)
+    return img
+
+
+def clean_plate_text(text: str) -> str:
+    text = text.upper()
+    text = sub(r"[^A-Z0-9\- ]", "", text)
+    text = sub(r"\s+", " ", text).strip()
+    return text
+
+
+def is_valid_plate(text: str) -> bool:
+    return any(match(pattern.value, text) for pattern in PlateFormat)
+
+
+def format_plate(text: str) -> str:
+    clean_text = sub(r"[\s\-]", "", text)
+
+    if match(PlateFormat.OFICIAL.value, text):
+        return f"GO {clean_text[2:]}"
+    elif match(PlateFormat.FEDERAL.value, text):
+        return f"TF {clean_text[2:]}"
+    elif match(PlateFormat.DIPLOMATICO.value, text):
+        return f"CD {clean_text[2:]}"
+    elif match(PlateFormat.MOTOCICLETA.value, text) and len(clean_text) == 7:
+        return f"{clean_text[:1]} {clean_text[1:3]} {clean_text[3:5]} {clean_text[5:]}"
+    elif len(clean_text) == 7:
+        return f"{clean_text[:3]} {clean_text[3:5]} {clean_text[5:]}"
+
+    return clean_text
