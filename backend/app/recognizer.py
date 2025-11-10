@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from enum import Enum
 from re import sub, match
 
-OCR_LANGUAGES = ["es", "en"]
-OCR_CONFIDENCE_THRESHOLD = 0.4
+from app.config import config  # Importar configuración
+
+# Constantes globales
 OCR_READER: Optional[Reader] = None
 
 
@@ -28,7 +29,7 @@ class OCRResult:
 def get_ocr_reader():
     global OCR_READER
     if OCR_READER is None:
-        OCR_READER = Reader(OCR_LANGUAGES)
+        OCR_READER = Reader(config.ocr.languages)
     return OCR_READER
 
 
@@ -43,7 +44,7 @@ def get_plate(img) -> str:
 
     valid_plates = []
     for bbox, text, confidence in results:
-        if confidence >= OCR_CONFIDENCE_THRESHOLD:
+        if confidence >= config.ocr.confidence_threshold:
             cleaned_text = clean_plate_text(text)
             if is_valid_plate(cleaned_text):
                 formatted_text = format_plate(cleaned_text)
@@ -76,6 +77,7 @@ def is_valid_plate(text: str) -> bool:
 def format_plate(text: str) -> str:
     clean_text = sub(r"[\s\-]", "", text)
 
+    # Detectar formato específico
     if match(PlateFormat.OFICIAL.value, text):
         return f"GO {clean_text[2:]}"
     elif match(PlateFormat.FEDERAL.value, text):
